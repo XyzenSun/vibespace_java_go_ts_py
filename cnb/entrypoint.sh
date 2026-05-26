@@ -52,12 +52,12 @@ upload_snapshot() {
     local snapshot_file="/tmp/${SNAPSHOT_NAME}"
     local copy_failed=0
 
-    # 1. 复制目标目录到 staging
+    # 1. 复制目标目录/文件到 staging
     mkdir -p "$staging_dir"
     IFS=, read -ra PATHS <<< "$OSS_PATHS"
     for path in "${PATHS[@]}"; do
         if [ -d "$path" ]; then
-            # 保持相对路径结构
+            # 目录：保持相对路径结构
             local rel_path="${path#/}"
             local target_dir="$staging_dir/$rel_path"
             mkdir -p "$target_dir"
@@ -67,6 +67,20 @@ upload_snapshot() {
             else
                 echo "[OSS] 已复制: $path"
             fi
+        elif [ -f "$path" ]; then
+            # 文件：复制到对应父目录
+            local rel_path="${path#/}"
+            local parent_dir="$(dirname "$rel_path")"
+            local target_parent="$staging_dir/$parent_dir"
+            mkdir -p "$target_parent"
+            if ! cp -a "$path" "$target_parent/"; then
+                echo "[OSS] 复制失败: $path"
+                copy_failed=1
+            else
+                echo "[OSS] 已复制: $path"
+            fi
+        else
+            echo "[OSS] 跳过（不存在）: $path"
         fi
     done
 
@@ -151,19 +165,30 @@ restore_snapshot() {
     IFS=, read -ra PATHS <<< "$OSS_PATHS"
     for path in "${PATHS[@]}"; do
         if [ -d "$path" ]; then
+            # 目录：备份整个目录
             local rel_path="${path#/}"
             mkdir -p "$backup_dir/$rel_path"
             cp -a "$path/." "$backup_dir/$rel_path/" 2>/dev/null || true
+        elif [ -f "$path" ]; then
+            # 文件：备份到对应父目录
+            local rel_path="${path#/}"
+            local parent_dir="$(dirname "$rel_path")"
+            mkdir -p "$backup_dir/$parent_dir"
+            cp -a "$path" "$backup_dir/$parent_dir/" 2>/dev/null || true
         fi
     done
 
-    # 4. 清空目标目录
-    echo "[OSS] 清空目标目录..."
+    # 4. 清空目标目录/删除目标文件
+    echo "[OSS] 清空目标..."
     for path in "${PATHS[@]}"; do
         if [ -d "$path" ]; then
+            # 目录：清空内容
             rm -rf "$path"/* 2>/dev/null || true
             rm -rf "$path"/.[!.]* 2>/dev/null || true
             rm -rf "$path"/..?* 2>/dev/null || true
+        elif [ -f "$path" ]; then
+            # 文件：直接删除
+            rm -f "$path" 2>/dev/null || true
         fi
     done
 
@@ -176,7 +201,14 @@ restore_snapshot() {
         for path in "${PATHS[@]}"; do
             local rel_path="${path#/}"
             if [ -d "$backup_dir/$rel_path" ]; then
+                # 目录：恢复整个目录
+                mkdir -p "$path"
                 cp -a "$backup_dir/$rel_path/." "$path/" 2>/dev/null || true
+            elif [ -f "$backup_dir/$rel_path" ]; then
+                # 文件：恢复单个文件
+                local parent_dir="$(dirname "$path")"
+                mkdir -p "$parent_dir"
+                cp -a "$backup_dir/$rel_path" "$path" 2>/dev/null || true
             fi
         done
         rm -rf "$snapshot_file" "$staging_dir" "$backup_dir"
@@ -187,8 +219,15 @@ restore_snapshot() {
     for path in "${PATHS[@]}"; do
         local rel_path="${path#/}"
         if [ -d "$staging_dir/$rel_path" ]; then
+            # 目录：恢复整个目录
             mkdir -p "$path"
             cp -a "$staging_dir/$rel_path/." "$path/" 2>/dev/null || true
+            echo "[OSS] 已恢复: $path"
+        elif [ -f "$staging_dir/$rel_path" ]; then
+            # 文件：恢复单个文件
+            local parent_dir="$(dirname "$path")"
+            mkdir -p "$parent_dir"
+            cp -a "$staging_dir/$rel_path" "$path" 2>/dev/null || true
             echo "[OSS] 已恢复: $path"
         fi
     done
